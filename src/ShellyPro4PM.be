@@ -5,6 +5,7 @@ class ShellyPro4PM
   var secs
   var wifi_sum
   var wifi_cnt
+  var refresh_triggered
 
   def init()
     var status = tasmota.cmd("status", true)['Status']
@@ -14,13 +15,15 @@ class ShellyPro4PM
     self.secs = 0
     self.wifi_sum = 0
     self.wifi_cnt = 0
+    self.refresh_triggered = false
 
-    self.clear_screen()
-    self.set_header(device)
-    self.set_relays()
+    # Initialize but do not perform full refresh immediately
+    # It will be triggered in the every_second method
+
     for relay: 0..self.relay_names.size()
       tasmota.add_rule(f"POWER{relay+1}#state", def (value) ShellyPro4PM.update_relay(relay+1,value) end )
     end
+
     tasmota.add_driver(self)
   end
 
@@ -83,43 +86,67 @@ class ShellyPro4PM
   def set_relays()
     var relay = 1
     for n : self.relay_names
-      var name = (n == "Tasmota" ? (relay == 4 ? "Display" : f"CH {relay}") : n)
-      self.line(relay, name, 0, 1)
-      self.update_relay(relay, tasmota.get_power(relay-1))
-      relay += 1
+      if relay > 4
+        break
+      end
+	var name = f"Output {relay}"  # Set the name to "Output X" where X is the relay number
+        self.line(relay, name, 0, 1)
+        self.update_relay(relay, tasmota.get_power(relay-1))
+        relay += 1
     end
-  end
 
+    # Add an empty line below the last relay
+    # The Y-coordinate is calculated based on the relay count
+    self.line(relay, "", 0, 1)
+  end
 
   static def update_relay(relay, powered)
-    ShellyPro4PM.switch(123, relay*21+4, powered)
+    # Exclude the fifth relay from being displayed
+    if relay <= 4
+      ShellyPro4PM.switch(123, relay*21+4, powered)
+    end
   end
 
-  def every_second()
+  def full_refresh()
+    self.clear_screen()
+    self.set_header(tasmota.cmd("status", true)['Status']['DeviceName'])
+    self.set_relays()
+    self.update_wifi_status() # Initial Wi-Fi status update
+  end
 
-    self.secs += 1
+  def update_wifi_status()
+    var wifi = tasmota.wifi()
+    var quality = wifi.find("quality")
+    self.wifi_sum += quality ? quality : 0
+    self.wifi_cnt += 1
+    var avrg = self.wifi_sum / self.wifi_cnt
+    self.status(100, 5, avrg)
 
-    if self.secs % 10 == 0
-      var wifi = tasmota.wifi()
-      var quality = wifi.find("quality")
-      self.wifi_sum += quality ? quality : 0
-      self.wifi_cnt += 1
-    end
-
-    if self.secs > 59
-      var avrg = self.wifi_sum / self.wifi_cnt
-      self.status(100, 5, avrg)
-
+    if self.secs >= 60
       self.wifi_sum = 0
       self.wifi_cnt = 0
+    end
+  end
 
-      var rtc = tasmota.rtc()['local']
-      self.secs = tasmota.time_dump(rtc)['sec']
+ def every_second()
+    self.secs += 1
+
+    # Trigger full refresh 5 seconds after boot
+    if self.secs == 5 && !self.refresh_triggered
+      self.full_refresh()
+      self.refresh_triggered = true
+    end
+
+    # Continue with other every_second tasks
+    if self.secs % 10 == 0
+      self.update_wifi_status()
+    end
+
+    if self.secs >= 60
+      self.secs = 0
     end
   end
 
 end
 
 return ShellyPro4PM
-# shelly.del()
-# shelly = ShellyPro4PM()
